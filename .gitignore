@@ -1,0 +1,17 @@
+# Python / 後端
+__pycache__/
+*.pyc
+.env
+backend/venv/
+backend/runs/
+backend/hard_examples/
+backend/raw_data/
+backend/yolo*/
+*.mp4
+*.avi
+*.pt
+
+# Node.js / 前端
+frontend/node_modules/
+frontend/dist/
+.DS_Store
