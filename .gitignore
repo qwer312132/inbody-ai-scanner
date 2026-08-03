@@ -6,7 +6,7 @@ backend/venv/
 backend/runs/
 backend/hard_examples/
 backend/raw_data/
-backend/yolo*/
+backend/weight/
 *.mp4
 *.avi
 *.pt
