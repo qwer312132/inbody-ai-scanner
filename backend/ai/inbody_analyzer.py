@@ -5,7 +5,7 @@ from ultralytics import YOLO
 
 print("⏳ 正在載入 YOLOv8 模型至記憶體...")
 # 🚀 關鍵 1：將模型宣告在全域，伺服器啟動時只載入一次
-model = YOLO('weight/best.pt')
+model = YOLO('ai/weight/best.pt')
 print("✅ 模型載入完成！")
 
 # 標籤定義與分類
