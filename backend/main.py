@@ -1,57 +1,134 @@
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.responses import JSONResponse
 import shutil
 import os
+import sqlite3
 from uuid import uuid4
+from datetime import datetime
 
-# 🚀 匯入我們剛寫好的 AI 模組
-from inbody_analyzer import run_inbody_analysis
+# 匯入 AI 模組與資料庫設定
+from ai.inbody_analyzer import run_inbody_analysis
+from db.database import DB_FILE, init_db
 
 app = FastAPI(title="InBody AI Scanner API")
 
 UPLOAD_DIR = "temp_videos"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+# 伺服器啟動時，自動確保資料庫存在
+init_db()
+
+def insert_measurement(user_name: str, data: dict):
+    """將解析後的數據完整寫入 SQLite"""
+    conn = sqlite3.connect("db/inbody_records.db") # 請確認路徑
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT id FROM users WHERE name = ?", (user_name,))
+    user = cursor.fetchone()
+    
+    if not user:
+        cursor.execute("INSERT INTO users (name) VALUES (?)", (user_name,))
+        user_id = cursor.lastrowid
+    else:
+        user_id = user[0]
+
+    # 對應 YOLO 字典的 Key，取出數值。若未辨識到則預設存入 None (SQL 的 NULL)
+    cursor.execute('''
+        INSERT INTO measurements (
+            user_id, weight, bmi, body_fat, visceral_fat, bmr, body_age,
+            subfat_whole, subfat_trunk, subfat_arms, subfat_legs,
+            muscle_whole, muscle_trunk, muscle_arms, muscle_legs
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (
+        user_id,
+        data.get('Weight'),
+        data.get('BMI'),
+        data.get('Body Fat'),
+        data.get('Visceral Fat'),
+        data.get('BMR'),
+        data.get('Body Age'),
+        
+        # 皮下脂肪
+        data.get('Subcutaneous Fat (Whole Body)'),
+        data.get('Subcutaneous Fat (Trunk)'),
+        data.get('Subcutaneous Fat (Arms)'),
+        data.get('Subcutaneous Fat (Legs)'),
+        
+        # 骨骼肌
+        data.get('Skeletal Muscle (Whole Body)'),
+        data.get('Skeletal Muscle (Trunk)'),
+        data.get('Skeletal Muscle (Arms)'),
+        data.get('Skeletal Muscle (Legs)')
+    ))
+    
+    conn.commit()
+    conn.close()
+
+# ==========================================
+# API 路由
+# ==========================================
 @app.get("/")
 def read_root():
     return {"message": "InBody AI Scanner Backend is running!"}
 
+# 🚀 修改：加入 user_name 作為 Form 表單參數
 @app.post("/api/analyze")
-async def analyze_video(file: UploadFile = File(...)):
+async def analyze_video(
+    user_name: str = Form(...), 
+    file: UploadFile = File(...)
+):
     if not file.filename.endswith(('.mp4', '.avi', '.mov')):
-        return JSONResponse(status_code=400, content={"error": "只支援 mp4, avi, mov 格式影片"})
+        return JSONResponse(status_code=400, content={"error": "只支援影片格式"})
 
     unique_filename = f"{uuid4()}_{file.filename}"
     file_path = os.path.join(UPLOAD_DIR, unique_filename)
 
     try:
-        # 1. 儲存影片
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
             
-        # 2. 呼叫 YOLO 分析器 (會花一段時間在這裡計算)
+        # 呼叫 YOLO 進行分析
         parsed_data = run_inbody_analysis(file_path)
         
-        # 3. 如果回傳的字典是空的，代表影片可能拍太差或太短
         if not parsed_data:
-            return JSONResponse(status_code=422, content={
-                "status": "failed",
-                "message": "無法從影片中解析出足夠穩定的數據，請重新拍攝。"
-            })
+            return JSONResponse(status_code=422, content={"status": "failed", "message": "辨識失敗"})
         
-        # 4. 成功回傳結果
+        # 🚀 將數據與使用者名稱綁定，寫入資料庫
+        insert_measurement(user_name, parsed_data)
+        
         return {
             "status": "success",
-            "message": "影片分析成功！",
+            "message": f"分析完成！已將數據記錄至 {user_name} 的名下。",
             "data": parsed_data
         }
 
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
-        
     finally:
         file.file.close()
-        
-        # 5. 分析結束後，把暫存影片砍掉，保持硬碟乾淨
         if os.path.exists(file_path):
             os.remove(file_path)
+
+# 🚀 新增：提供給前端畫圖用的歷史紀錄 API
+@app.get("/api/records/{user_name}")
+def get_user_records(user_name: str):
+    conn = sqlite3.connect(DB_FILE)
+    # 將查詢結果轉換為字典格式，方便轉成 JSON
+    conn.row_factory = sqlite3.Row 
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        SELECT m.record_time, m.weight, m.bmi, m.body_fat, m.visceral_fat, m.bmr, m.body_age,
+               m.subfat_whole, m.subfat_trunk, m.subfat_arms, m.subfat_legs,
+               m.muscle_whole, m.muscle_trunk, m.muscle_arms, m.muscle_legs
+        FROM measurements m
+        JOIN users u ON m.user_id = u.id
+        WHERE u.name = ?
+        ORDER BY m.record_time ASC
+    ''', (user_name,))
+    
+    records = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    
+    return {"user": user_name, "history": records}
