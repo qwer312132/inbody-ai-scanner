@@ -1,16 +1,26 @@
 from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 import shutil
 import os
 import sqlite3
 from uuid import uuid4
 from datetime import datetime
-
+    
 # 匯入 AI 模組與資料庫設定
 from ai.inbody_analyzer import run_inbody_analysis
 from db.database import DB_FILE, init_db
 
 app = FastAPI(title="InBody AI Scanner API")
+
+# 添加 CORS 中間件
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # 允許所有來源
+    allow_credentials=True,
+    allow_methods=["*"],  # 允許所有 HTTP 方法
+    allow_headers=["*"],  # 允許所有請求頭
+)
 
 UPLOAD_DIR = "temp_videos"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
