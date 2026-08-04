@@ -114,7 +114,7 @@ def run_inbody_analysis(video_path: str) -> dict:
     # ==========================================
     # 開票統計並轉為 JSON 友善的字典格式
     # ==========================================
-    MIN_VOTES = 5
+    MIN_VOTES = 0
     report_data = {}
     
     for mode, values in final_report.items():
