@@ -1,5 +1,5 @@
 <script setup>
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import axios from 'axios'
 import { Line } from 'vue-chartjs'
 import {
@@ -9,53 +9,110 @@ import {
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend)
 
-// 同樣接收來自父元件的 userName
 const props = defineProps({
   userName: String
 })
 
+const METRICS = [
+  { key: 'weight', label: '體重', unit: 'kg' },
+  { key: 'bmi', label: 'BMI', unit: '' },
+  { key: 'body_fat', label: '體脂肪率', unit: '%' },
+  { key: 'visceral_fat', label: '內臟脂肪', unit: '' },
+  { key: 'bmr', label: '基礎代謝率', unit: 'kcal' },
+  { key: 'body_age', label: '身體年齡', unit: '歲' },
+  { key: 'subfat_whole', label: '皮下脂肪（全身）', unit: '' },
+  { key: 'subfat_trunk', label: '皮下脂肪（軀幹）', unit: '' },
+  { key: 'subfat_arms', label: '皮下脂肪（手臂）', unit: '' },
+  { key: 'subfat_legs', label: '皮下脂肪（腿部）', unit: '' },
+  { key: 'muscle_whole', label: '骨骼肌（全身）', unit: '' },
+  { key: 'muscle_trunk', label: '骨骼肌（軀幹）', unit: '' },
+  { key: 'muscle_arms', label: '骨骼肌（手臂）', unit: '' },
+  { key: 'muscle_legs', label: '骨骼肌（腿部）', unit: '' }
+]
+
 const isFetchingHistory = ref(false)
 const historyMessage = ref('')
-const chartData = ref(null)
+const history = ref([])
+const selectedMetric = ref('weight')
 
-const chartOptions = {
+const selectedMetricInfo = computed(() =>
+  METRICS.find(metric => metric.key === selectedMetric.value) ?? METRICS[0]
+)
+
+const chartData = computed(() => {
+  if (history.value.length === 0) return null
+
+  let previousValue = 0
+  const filledValues = []
+  const values = history.value.map(row => {
+    const rawValue = row[selectedMetric.value]
+    const value = Number(rawValue)
+    const isMissing = rawValue === null || rawValue === undefined || rawValue === '' ||
+      !Number.isFinite(value) || value === -1
+
+    if (isMissing) {
+      filledValues.push(true)
+      return previousValue
+    }
+
+    filledValues.push(false)
+    previousValue = value
+    return value
+  })
+
+  const metric = selectedMetricInfo.value
+  const label = metric.unit ? `${metric.label} (${metric.unit})` : metric.label
+
+  return {
+    labels: history.value.map(row => row.record_time.split(' ')[0]),
+    datasets: [{
+      label,
+      data: values,
+      borderColor: '#3498db',
+      backgroundColor: '#3498db',
+      pointBackgroundColor: filledValues.map(isFilled => isFilled ? '#f39c12' : '#3498db'),
+      pointBorderColor: filledValues.map(isFilled => isFilled ? '#d35400' : '#3498db'),
+      pointRadius: filledValues.map(isFilled => isFilled ? 6 : 4),
+      tension: 0.3
+    }]
+  }
+})
+
+const chartOptions = computed(() => ({
   responsive: true,
   maintainAspectRatio: false,
-  plugins: { legend: { position: 'top' }, title: { display: true, text: '測量趨勢' } }
-}
+  plugins: {
+    legend: { position: 'top' },
+    title: { display: true, text: `${selectedMetricInfo.value.label}歷史紀錄` },
+    tooltip: {
+      callbacks: {
+        afterLabel: context => context.dataset.pointBackgroundColor[context.dataIndex] === '#f39c12'
+          ? '未辨識到：已以前一次數值補上'
+          : ''
+      }
+    }
+  }
+}))
 
 const fetchHistory = async () => {
   if (!props.userName) {
-    historyMessage.value = "請先輸入要查詢的測量者名稱！"
+    historyMessage.value = '請先輸入姓名，再查詢歷史紀錄。'
     return
   }
-  
+
   isFetchingHistory.value = true
   historyMessage.value = ''
-  chartData.value = null
+  history.value = []
 
   try {
     const response = await axios.get(`http://localhost:8000/api/records/${props.userName}`)
-    const history = response.data.history
-    
-    if (history.length === 0) {
-      historyMessage.value = `找不到「${props.userName}」的歷史紀錄。`
-      return
-    }
+    history.value = response.data.history
 
-    const labels = history.map(row => row.record_time.split(' ')[0])
-    const weightData = history.map(row => row.weight)
-    const bodyFatData = history.map(row => row.body_fat)
-
-    chartData.value = {
-      labels: labels,
-      datasets: [
-        { label: '體重 (kg)', backgroundColor: '#3498db', borderColor: '#3498db', data: weightData, tension: 0.3 },
-        { label: '體脂率 (%)', backgroundColor: '#e74c3c', borderColor: '#e74c3c', data: bodyFatData, tension: 0.3 }
-      ]
+    if (history.value.length === 0) {
+      historyMessage.value = `${props.userName} 尚無歷史紀錄。`
     }
   } catch (error) {
-    historyMessage.value = "無法取得歷史紀錄。"
+    historyMessage.value = '無法取得歷史紀錄，請確認後端服務是否啟動。'
   } finally {
     isFetchingHistory.value = false
   }
@@ -65,13 +122,24 @@ const fetchHistory = async () => {
 <template>
   <div class="history-chart">
     <button class="action-btn query-btn" @click="fetchHistory" :disabled="isFetchingHistory">
-      {{ isFetchingHistory ? '查詢中...' : '載入歷史圖表' }}
+      {{ isFetchingHistory ? '查詢中...' : '查詢歷史紀錄' }}
     </button>
     <p v-if="historyMessage" class="error-msg">{{ historyMessage }}</p>
 
-    <div v-if="chartData" class="chart-container">
-      <Line :data="chartData" :options="chartOptions" />
-    </div>
+    <template v-if="chartData">
+      <label class="metric-selector">
+        顯示項目
+        <select v-model="selectedMetric">
+          <option v-for="metric in METRICS" :key="metric.key" :value="metric.key">
+            {{ metric.label }}{{ metric.unit ? ` (${metric.unit})` : '' }}
+          </option>
+        </select>
+      </label>
+      <p class="chart-note">橘色點代表該次未辨識到數值，已用前一次數值補上；第一筆則以 0 補上。</p>
+      <div class="chart-container">
+        <Line :data="chartData" :options="chartOptions" />
+      </div>
+    </template>
   </div>
 </template>
 
@@ -82,5 +150,8 @@ const fetchHistory = async () => {
 .query-btn:hover:not(:disabled) { background-color: #2980b9; }
 .action-btn:disabled { background-color: #bdc3c7; cursor: not-allowed; }
 .error-msg { color: #e74c3c; margin-top: 1rem; font-weight: bold; text-align: center; }
-.chart-container { position: relative; height: 400px; width: 100%; margin-top: 1.5rem; }
+.metric-selector { display: flex; align-items: center; gap: 0.75rem; margin-top: 1.5rem; font-weight: bold; }
+.metric-selector select { flex: 1; padding: 0.6rem; border: 1px solid #bdc3c7; border-radius: 6px; font-size: 1rem; }
+.chart-note { color: #7f8c8d; font-size: 0.9rem; margin: 0.75rem 0 0; }
+.chart-container { position: relative; height: 400px; width: 100%; margin-top: 0.75rem; }
 </style>
