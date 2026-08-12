@@ -28,6 +28,12 @@ SINGLE_MODES = {'Weight', 'Body Fat', 'Visceral Fat', 'BMR', 'BMI', 'Body Age'}
 COMP_MAIN = {'Subcutaneous Fat', 'Skeletal Muscle'}
 COMP_PART = {'(Whole Body)', '(Trunk)', '(Arms)', '(Legs)'}
 
+# 所有 API 與資料庫會使用的 InBody 欄位。未辨識到時以 -1 表示。
+EXPECTED_MODES = (
+    'Weight', 'BMI', 'Body Fat', 'Visceral Fat', 'BMR', 'Body Age',
+    *(f'{main} {part}' for main in COMP_MAIN for part in COMP_PART),
+)
+
 def run_inbody_analysis(video_path: str) -> dict:
     """
     接收影片路徑，執行 YOLO 推論，回傳最終聚合的數據字典。
@@ -114,8 +120,9 @@ def run_inbody_analysis(video_path: str) -> dict:
     # ==========================================
     # 開票統計並轉為 JSON 友善的字典格式
     # ==========================================
-    MIN_VOTES = 5
-    report_data = {}
+    MIN_VOTES = 0
+    # 先填入完整欄位，避免未辨識到的項目從 JSON 中消失。
+    report_data = {mode: -1 for mode in EXPECTED_MODES}
     
     for mode, values in final_report.items():
         most_common_val, count = Counter(values).most_common(1)[0]
