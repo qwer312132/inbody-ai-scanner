@@ -6,11 +6,11 @@ import os
 import sqlite3
 from uuid import uuid4
 from datetime import datetime
-    
+from fastapi.staticfiles import StaticFiles
 # 匯入 AI 模組與資料庫設定
 from ai.inbody_analyzer import run_inbody_analysis
 from db.database import DB_FILE, init_db
-
+from fastapi.responses import FileResponse
 app = FastAPI(title="InBody AI Scanner API")
 
 # 添加 CORS 中間件
@@ -78,9 +78,9 @@ def insert_measurement(user_name: str, data: dict):
 # ==========================================
 # API 路由
 # ==========================================
-@app.get("/")
-def read_root():
-    return {"message": "InBody AI Scanner Backend is running!"}
+# @app.get("/")
+# def read_root():
+#     return {"message": "InBody AI Scanner Backend is running!"}
 
 # 🚀 修改：加入 user_name 作為 Form 表單參數
 @app.post("/api/analyze")
@@ -142,3 +142,12 @@ def get_user_records(user_name: str):
     conn.close()
     
     return {"user": user_name, "history": records}
+app.mount("/assets", StaticFiles(directory="dist/assets"), name="assets")
+@app.get("/")
+def read_index():
+    return FileResponse("dist/index.html")
+
+# 3. (選用) 如果 Vue 有使用 Vue Router 的 history 模式，建議加上這段捕捉所有其他路由
+@app.get("/{catchall:path}")
+def serve_vue_router(catchall: str):
+    return FileResponse("dist/index.html")

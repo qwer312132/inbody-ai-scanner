@@ -105,7 +105,7 @@ const fetchHistory = async () => {
   history.value = []
 
   try {
-    const response = await axios.get(`http://localhost:8000/api/records/${props.userName}`)
+    const response = await axios.get(`/api/records/${encodeURIComponent(props.userName)}`)
     history.value = response.data.history
 
     if (history.value.length === 0) {

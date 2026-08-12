@@ -31,7 +31,7 @@ npm run preview
 
 --------------------------------------------------
 ## 🌿 4. Git 版本控制日常 (存檔與備份)
-
+git checkout -b branch
 檢查目前有哪些檔案被修改過：
 git status
 
@@ -43,3 +43,17 @@ git commit -m "feat: 新增了歷史折線圖功能"
 
 將最新的版本推送到 GitHub 雲端備份：
 git push
+git push -u origin branch
+
+1.切換回本地的主線
+git checkout main
+
+2.把雲端剛剛合併好的最新進度拉下來
+git pull origin main
+
+3.刪除本地端已經完成任務的舊分支 (保持環境乾淨)
+git branch -d branch
+
+## ngrok
+ngrok http 8000    
+uvicorn main:app --host 0.0.0.0 --port 8000

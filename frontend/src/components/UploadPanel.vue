@@ -31,7 +31,7 @@ const uploadVideo = async () => {
   resultData.value = null
 
   try {
-    const response = await axios.post('http://localhost:8000/api/analyze', formData)
+    const response = await axios.post('/api/analyze', formData)
     resultData.value = response.data.data
   } catch (error) {
     errorMessage.value = error.response?.data?.message || "分析失敗，請檢查後端。"
