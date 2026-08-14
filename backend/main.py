@@ -38,7 +38,7 @@ init_db()
 
 def insert_measurement(user_name: str, data: dict):
     """將解析後的數據完整寫入 SQLite"""
-    conn = sqlite3.connect("db/inbody_records.db") # 請確認路徑
+    conn = sqlite3.connect(DB_FILE) # 請確認路徑
     cursor = conn.cursor()
     
     cursor.execute("SELECT id FROM users WHERE name = ?", (user_name,))
