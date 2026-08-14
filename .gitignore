@@ -7,10 +7,13 @@ backend/runs/
 backend/hard_examples/
 backend/raw_data/
 backend/weight/
+backend/dist/
+
 *.mp4
 *.avi
 *.pt
-
+*.db
+*.sqlite3
 # Node.js / 前端
 frontend/node_modules/
 frontend/dist/
