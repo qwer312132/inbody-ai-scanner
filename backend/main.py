@@ -4,6 +4,8 @@ from fastapi.middleware.cors import CORSMiddleware
 import shutil
 import os
 import sqlite3
+import logging
+import time
 from uuid import uuid4
 from datetime import datetime
 from fastapi.staticfiles import StaticFiles
@@ -12,6 +14,12 @@ from ai.inbody_analyzer import run_inbody_analysis
 from db.database import DB_FILE, init_db
 from fastapi.responses import FileResponse
 app = FastAPI(title="InBody AI Scanner API")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
+logger = logging.getLogger("inbody.api")
 
 # 添加 CORS 中間件
 app.add_middleware(
@@ -41,6 +49,13 @@ def insert_measurement(user_name: str, data: dict):
         user_id = cursor.lastrowid
     else:
         user_id = user[0]
+
+    # Keep only the newest measurement for each user on the current local day.
+    cursor.execute('''
+        DELETE FROM measurements
+        WHERE user_id = ?
+          AND DATE(record_time, 'localtime') = DATE('now', 'localtime')
+    ''', (user_id,))
 
     # 對應 YOLO 字典的 Key，取出數值。若未辨識到則預設存入 None (SQL 的 NULL)
     cursor.execute('''
@@ -88,6 +103,12 @@ async def analyze_video(
     user_name: str = Form(...), 
     file: UploadFile = File(...)
 ):
+    request_id = uuid4().hex[:8]
+    request_started = time.perf_counter()
+    logger.info(
+        "[%s] Request received: user=%r, filename=%r, content_type=%r",
+        request_id, user_name, file.filename, file.content_type,
+    )
     if not file.filename.endswith(('.mp4', '.avi', '.mov')):
         return JSONResponse(status_code=400, content={"error": "只支援影片格式"})
 
@@ -95,17 +116,26 @@ async def analyze_video(
     file_path = os.path.join(UPLOAD_DIR, unique_filename)
 
     try:
+        logger.info("[%s] Saving uploaded video", request_id)
+        save_started = time.perf_counter()
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
+        file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+        logger.info("[%s] Upload saved: %.2f MB in %.2f s", request_id, file_size_mb, time.perf_counter() - save_started)
             
         # 呼叫 YOLO 進行分析
-        parsed_data = run_inbody_analysis(file_path)
+        logger.info("[%s] Starting AI analysis", request_id)
+        analysis_started = time.perf_counter()
+        parsed_data = run_inbody_analysis(file_path, request_id=request_id)
+        logger.info("[%s] AI analysis finished in %.2f s", request_id, time.perf_counter() - analysis_started)
         
         if not parsed_data:
             return JSONResponse(status_code=422, content={"status": "failed", "message": "辨識失敗"})
         
         # 🚀 將數據與使用者名稱綁定，寫入資料庫
+        logger.info("[%s] Saving analysis result to database", request_id)
         insert_measurement(user_name, parsed_data)
+        logger.info("[%s] Request complete in %.2f s", request_id, time.perf_counter() - request_started)
         
         return {
             "status": "success",
@@ -114,11 +144,13 @@ async def analyze_video(
         }
 
     except Exception as e:
+        logger.exception("[%s] Request failed after %.2f s", request_id, time.perf_counter() - request_started)
         return JSONResponse(status_code=500, content={"error": str(e)})
     finally:
         file.file.close()
         if os.path.exists(file_path):
             os.remove(file_path)
+            logger.info("[%s] Temporary video removed", request_id)
 
 # 🚀 新增：提供給前端畫圖用的歷史紀錄 API
 @app.get("/api/records/{user_name}")

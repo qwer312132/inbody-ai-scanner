@@ -11,6 +11,8 @@ const selectedFile = ref(null)
 const isLoading = ref(false)
 const resultData = ref(null)
 const errorMessage = ref('')
+const uploadProgress = ref(0)
+const uploadPhase = ref('')
 
 const handleFileChange = (event) => {
   selectedFile.value = event.target.files[0]
@@ -29,14 +31,26 @@ const uploadVideo = async () => {
   isLoading.value = true
   errorMessage.value = ''
   resultData.value = null
+  uploadProgress.value = 0
+  uploadPhase.value = 'uploading'
 
   try {
-    const response = await axios.post('/api/analyze', formData)
+    const response = await axios.post('/api/analyze', formData, {
+      onUploadProgress: (event) => {
+        if (!event.total) return
+
+        uploadProgress.value = Math.round((event.loaded * 100) / event.total)
+        if (uploadProgress.value >= 100) {
+          uploadPhase.value = 'analyzing'
+        }
+      }
+    })
     resultData.value = response.data.data
   } catch (error) {
     errorMessage.value = error.response?.data?.message || "分析失敗，請檢查後端。"
   } finally {
     isLoading.value = false
+    uploadPhase.value = ''
   }
 }
 </script>
@@ -51,6 +65,20 @@ const uploadVideo = async () => {
     <button class="action-btn upload-btn" @click="uploadVideo" :disabled="isLoading">
       {{ isLoading ? 'AI 視覺分析中...' : '開始分析' }}
     </button>
+    <div v-if="isLoading" class="progress-section" aria-live="polite">
+      <div class="progress-label">
+        <span v-if="uploadPhase === 'uploading'">影片上傳中</span>
+        <span v-else>影片已送出，AI 分析中</span>
+        <span v-if="uploadPhase === 'uploading'">{{ uploadProgress }}%</span>
+      </div>
+      <div class="progress-track" role="progressbar" :aria-valuenow="uploadPhase === 'uploading' ? uploadProgress : undefined" aria-valuemin="0" aria-valuemax="100">
+        <div
+          class="progress-bar"
+          :class="{ analyzing: uploadPhase === 'analyzing' }"
+          :style="uploadPhase === 'uploading' ? { width: `${uploadProgress}%` } : undefined"
+        ></div>
+      </div>
+    </div>
     <p v-if="errorMessage" class="error-msg">{{ errorMessage }}</p>
 
     <div v-if="resultData" class="data-grid">
@@ -70,6 +98,12 @@ const uploadVideo = async () => {
 .upload-btn { background-color: #42b883; }
 .upload-btn:hover:not(:disabled) { background-color: #33a06f; }
 .action-btn:disabled { background-color: #bdc3c7; cursor: not-allowed; }
+.progress-section { margin-top: 1rem; }
+.progress-label { display: flex; justify-content: space-between; margin-bottom: 0.4rem; color: #52616b; font-size: 0.9rem; }
+.progress-track { height: 0.7rem; overflow: hidden; border-radius: 999px; background: #e9eef0; }
+.progress-bar { height: 100%; border-radius: inherit; background: #42b883; transition: width 0.2s ease; }
+.progress-bar.analyzing { width: 45%; animation: analyzing-progress 1.25s ease-in-out infinite; }
+@keyframes analyzing-progress { 0% { transform: translateX(-100%); } 100% { transform: translateX(325%); } }
 .error-msg { color: #e74c3c; margin-top: 1rem; font-weight: bold; text-align: center; }
 .data-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1rem; margin-top: 1.5rem; }
 .data-item { background: #f8f9fa; padding: 1rem; border-radius: 8px; display: flex; flex-direction: column; align-items: center; border-left: 4px solid #42b883; }

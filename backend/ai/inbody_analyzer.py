@@ -1,7 +1,11 @@
 import cv2
 import numpy as np
+import logging
+import time
 from collections import defaultdict, Counter
 from ultralytics import YOLO
+
+logger = logging.getLogger("inbody.analyzer")
 
 print("⏳ 正在載入 YOLOv8 模型至記憶體...")
 # 🚀 關鍵 1：將模型宣告在全域，伺服器啟動時只載入一次
@@ -28,26 +32,63 @@ SINGLE_MODES = {'Weight', 'Body Fat', 'Visceral Fat', 'BMR', 'BMI', 'Body Age'}
 COMP_MAIN = {'Subcutaneous Fat', 'Skeletal Muscle'}
 COMP_PART = {'(Whole Body)', '(Trunk)', '(Arms)', '(Legs)'}
 
+# A single video has frames with the same dimensions, so YOLO can infer several
+# frames together.  Tune this down on low-memory GPUs if necessary.
+INFERENCE_BATCH_SIZE = 8
+
 # 所有 API 與資料庫會使用的 InBody 欄位。未辨識到時以 -1 表示。
 EXPECTED_MODES = (
     'Weight', 'BMI', 'Body Fat', 'Visceral Fat', 'BMR', 'Body Age',
     *(f'{main} {part}' for main in COMP_MAIN for part in COMP_PART),
 )
 
-def run_inbody_analysis(video_path: str) -> dict:
+def run_inbody_analysis(video_path: str, request_id: str = "-") -> dict:
     """
     接收影片路徑，執行 YOLO 推論，回傳最終聚合的數據字典。
     """
     cap = cv2.VideoCapture(video_path)
     final_report = defaultdict(list)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    frame_number = 0
+    analysis_started = time.perf_counter()
 
+    if not cap.isOpened():
+        raise ValueError(f"Unable to open video: {video_path}")
+
+    logger.info(
+        "[%s] Video opened: frames=%s, fps=%.2f",
+        request_id, total_frames if total_frames > 0 else "unknown", fps,
+    )
+
+    batch_results = iter(())
     while cap.isOpened():
-        success, frame = cap.read()
-        if not success:
-            break
+        try:
+            frame, result = next(batch_results)
+        except StopIteration:
+            frames = []
+            for _ in range(INFERENCE_BATCH_SIZE):
+                success, frame = cap.read()
+                if not success:
+                    break
+                frames.append(frame)
 
-        results = model.predict(frame, conf=0.5, imgsz=1088, agnostic_nms=True, verbose=False)
-        result = results[0]
+            if not frames:
+                break
+
+            if frame_number == 0:
+                logger.info(
+                    "[%s] Running YOLO inference in batches of %d frames",
+                    request_id, INFERENCE_BATCH_SIZE,
+                )
+
+            results = model.predict(
+                frames, conf=0.5, imgsz=1088, agnostic_nms=True, verbose=False,
+            )
+            batch_results = iter(zip(frames, results))
+            frame, result = next(batch_results)
+
+        frame_number += 1
         h, w = frame.shape[:2]
         
         raw_digits = []
@@ -114,7 +155,20 @@ def run_inbody_analysis(video_path: str) -> dict:
             if val_str != "" and val_str != ".":
                 final_report[current_mode].append(val_str)
 
+        if frame_number % 30 == 0:
+            progress = f"{frame_number / total_frames:.0%}" if total_frames > 0 else "unknown"
+            logger.info(
+                "[%s] Analysis progress: frame %d/%s (%s), elapsed %.1f s",
+                request_id, frame_number,
+                total_frames if total_frames > 0 else "?", progress,
+                time.perf_counter() - analysis_started,
+            )
+
     cap.release()
+    logger.info(
+        "[%s] Finished reading %d frames in %.2f s",
+        request_id, frame_number, time.perf_counter() - analysis_started,
+    )
     # 🚀 關鍵 2：拔除 cv2.imshow，改為純資料返回
 
     # ==========================================
