@@ -1,0 +1,48 @@
+name: Backend CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  test-backend:
+    runs-on: ubuntu-latest
+    
+    # 🚀 關鍵設定：告訴虛擬機，這個 Job 裡的所有指令預設都在 backend 資料夾下執行
+    defaults:
+      run:
+        working-directory: ./backend
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      # 根據你本地的環境，這裡幫你調整成 Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    # 因為你使用的是預設的 working-directory，這裡不用寫 cd backend
+    - name: Install system dependencies for OpenCV
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libgl1-mesa-glx libglib2.0-0
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        # 此時的目錄已經在 backend 下，所以它抓得到 backend/requirements.txt
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        pip install pytest httpx
+
+    - name: Setup Mock Directories
+      run: |
+        mkdir -p ai/weight
+        touch ai/weight/best.pt
+
+    - name: Run Pytest
+      run: |
+        pytest -v
