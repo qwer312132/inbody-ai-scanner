@@ -47,11 +47,6 @@ jobs:
         # 安裝測試所需的套件
         pip install pytest httpx
 
-    - name: Setup Mock Directories
-      run: |
-        mkdir -p ai/weight
-        touch ai/weight/best.pt
-
     - name: Run Pytest
       run: |
         pytest -v
