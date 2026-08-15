@@ -5,7 +5,7 @@ import time
 from collections import defaultdict, Counter
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
     from ultralytics import YOLO
@@ -62,7 +62,11 @@ EXPECTED_MODES = (
     *(f'{main} {part}' for main in COMP_MAIN for part in COMP_PART),
 )
 
-def run_inbody_analysis(video_path: str, request_id: str = "-") -> dict:
+def run_inbody_analysis(
+    video_path: str,
+    request_id: str = "-",
+    progress_callback: Callable[[int, int, float], None] | None = None,
+) -> dict:
     """
     接收影片路徑，執行 YOLO 推論，回傳最終聚合的數據字典。
     """
@@ -83,6 +87,8 @@ def run_inbody_analysis(video_path: str, request_id: str = "-") -> dict:
         "[%s] Video opened: frames=%s, fps=%.2f",
         request_id, total_frames if total_frames > 0 else "unknown", fps,
     )
+    if progress_callback:
+        progress_callback(0, total_frames, 0)
 
     batch_results = iter(())
     while cap.isOpened():
@@ -179,19 +185,24 @@ def run_inbody_analysis(video_path: str, request_id: str = "-") -> dict:
                 final_report[current_mode].append(val_str)
 
         if frame_number % 30 == 0:
+            elapsed_seconds = time.perf_counter() - analysis_started
             progress = f"{frame_number / total_frames:.0%}" if total_frames > 0 else "unknown"
             logger.info(
                 "[%s] Analysis progress: frame %d/%s (%s), elapsed %.1f s",
                 request_id, frame_number,
                 total_frames if total_frames > 0 else "?", progress,
-                time.perf_counter() - analysis_started,
+                elapsed_seconds,
             )
+            if progress_callback:
+                progress_callback(frame_number, total_frames, elapsed_seconds)
 
     cap.release()
     logger.info(
         "[%s] Finished reading %d frames in %.2f s",
         request_id, frame_number, time.perf_counter() - analysis_started,
     )
+    if progress_callback:
+        progress_callback(frame_number, total_frames, time.perf_counter() - analysis_started)
     # 🚀 關鍵 2：拔除 cv2.imshow，改為純資料返回
 
     # ==========================================
