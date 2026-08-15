@@ -3,14 +3,34 @@ import numpy as np
 import logging
 import time
 from collections import defaultdict, Counter
-from ultralytics import YOLO
+from functools import lru_cache
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ultralytics import YOLO
 
 logger = logging.getLogger("inbody.analyzer")
 
-print("⏳ 正在載入 YOLOv8 模型至記憶體...")
-# 🚀 關鍵 1：將模型宣告在全域，伺服器啟動時只載入一次
-model = YOLO('ai/weight/best.pt')
-print("✅ 模型載入完成！")
+# Resolve from this file rather than the process working directory.
+MODEL_PATH = Path(__file__).resolve().parent / "weight" / "best.pt"
+
+
+@lru_cache(maxsize=1)
+def get_model() -> Any:
+    """Load the YOLO weights on first inference, then reuse that instance."""
+    if not MODEL_PATH.is_file():
+        raise FileNotFoundError(
+            f"YOLO model weights were not found at {MODEL_PATH}. "
+            "Set up ai/weight/best.pt before submitting an analysis request."
+        )
+
+    logger.info("Loading YOLO model from %s", MODEL_PATH)
+    # Keep this import here as well: API-only CI tests do not require the
+    # inference package or its PyTorch dependency.
+    from ultralytics import YOLO
+
+    return YOLO(str(MODEL_PATH))
 
 # 標籤定義與分類
 label_map = {
@@ -46,6 +66,9 @@ def run_inbody_analysis(video_path: str, request_id: str = "-") -> dict:
     """
     接收影片路徑，執行 YOLO 推論，回傳最終聚合的數據字典。
     """
+    # Importing this module (for example in CI API tests) must not require
+    # model weights; load them only when an analysis is requested.
+    model = get_model()
     cap = cv2.VideoCapture(video_path)
     final_report = defaultdict(list)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))

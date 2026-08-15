@@ -1,0 +1,52 @@
+name: Backend CI
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  test-backend:
+    runs-on: ubuntu-latest
+    
+    # 🚀 關鍵設定：告訴虛擬機，這個 Job 裡的所有指令預設都在 backend 資料夾下執行
+    defaults:
+      run:
+        working-directory: ./backend
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      # 根據你本地的環境，這裡幫你調整成 Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    # 因為你使用的是預設的 working-directory，這裡不用寫 cd backend
+    - name: Install system dependencies for OpenCV
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libgl1 libglib2.0-0
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        
+        # 如果有 requirements.txt，進行處理與安裝
+        if [ -f requirements.txt ]; then 
+          # 將 +cu121 替換為 +cpu，避免下載龐大的 GPU 版本
+          sed -i 's/+cu121/+cpu/g' requirements.txt
+          
+          # 安裝並指定 PyTorch 官方的 CPU 下載源
+          pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+        fi
+        
+        # 安裝測試所需的套件
+        pip install pytest httpx
+
+    - name: Run Pytest
+      run: |
+        pytest -v
