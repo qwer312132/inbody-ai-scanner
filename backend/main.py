@@ -8,6 +8,7 @@ import logging
 import time
 from uuid import uuid4
 from datetime import datetime
+from pathlib import Path
 from fastapi.staticfiles import StaticFiles
 # 匯入 AI 模組與資料庫設定
 from ai.inbody_analyzer import run_inbody_analysis
@@ -174,12 +175,20 @@ def get_user_records(user_name: str):
     conn.close()
     
     return {"user": user_name, "history": records}
-app.mount("/assets", StaticFiles(directory="dist/assets"), name="assets")
+FRONTEND_DIST_DIR = Path(__file__).resolve().parent / "dist"
+
+# The backend API can run independently of a locally built frontend.  This is
+# important for API-only CI tests, where ``dist/`` is intentionally ignored.
+app.mount(
+    "/assets",
+    StaticFiles(directory=FRONTEND_DIST_DIR / "assets", check_dir=False),
+    name="assets",
+)
 @app.get("/")
 def read_index():
-    return FileResponse("dist/index.html")
+    return FileResponse(FRONTEND_DIST_DIR / "index.html")
 
 # 3. (選用) 如果 Vue 有使用 Vue Router 的 history 模式，建議加上這段捕捉所有其他路由
 @app.get("/{catchall:path}")
 def serve_vue_router(catchall: str):
-    return FileResponse("dist/index.html")
+    return FileResponse(FRONTEND_DIST_DIR / "index.html")
