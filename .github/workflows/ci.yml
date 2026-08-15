@@ -34,8 +34,17 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        # 此時的目錄已經在 backend 下，所以它抓得到 backend/requirements.txt
-        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        
+        # 如果有 requirements.txt，進行處理與安裝
+        if [ -f requirements.txt ]; then 
+          # 將 +cu121 替換為 +cpu，避免下載龐大的 GPU 版本
+          sed -i 's/+cu121/+cpu/g' requirements.txt
+          
+          # 安裝並指定 PyTorch 官方的 CPU 下載源
+          pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+        fi
+        
+        # 安裝測試所需的套件
         pip install pytest httpx
 
     - name: Setup Mock Directories
