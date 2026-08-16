@@ -10,6 +10,8 @@ const props = defineProps({
 const selectedFile = ref(null)
 const isLoading = ref(false)
 const resultData = ref(null)
+const isSaving = ref(false)
+const saveMessage = ref('')
 const errorMessage = ref('')
 const uploadProgress = ref(0)
 const uploadPhase = ref('')
@@ -68,6 +70,7 @@ const uploadVideo = async () => {
   isLoading.value = true
   errorMessage.value = ''
   resultData.value = null
+  saveMessage.value = ''
   uploadProgress.value = 0
   uploadPhase.value = 'uploading'
   analysisProgress.value = null
@@ -91,6 +94,25 @@ const uploadVideo = async () => {
     isLoading.value = false
     uploadPhase.value = ''
     stopAnalysisProgressPolling()
+  }
+}
+
+const confirmMeasurement = async () => {
+  if (!resultData.value || isSaving.value) return
+
+  isSaving.value = true
+  errorMessage.value = ''
+  saveMessage.value = ''
+  try {
+    await axios.post('/api/measurements/confirm', {
+      user_name: props.userName,
+      data: resultData.value,
+    })
+    saveMessage.value = '資料已確認並儲存。'
+  } catch (error) {
+    errorMessage.value = error.response?.data?.detail || '儲存失敗，請稍後再試。'
+  } finally {
+    isSaving.value = false
   }
 }
 </script>
@@ -122,11 +144,18 @@ const uploadVideo = async () => {
     </div>
     <p v-if="errorMessage" class="error-msg">{{ errorMessage }}</p>
 
-    <div v-if="resultData" class="data-grid">
+    <div v-if="resultData" class="review-section">
+      <p class="review-hint">請確認 AI 判讀結果；如有誤可直接修改，再按下確認儲存。</p>
+      <div class="data-grid">
       <div v-for="(value, key) in resultData" :key="key" class="data-item">
         <span class="data-key">{{ key }}</span>
-        <span class="data-value">{{ value }}</span>
+        <input v-model="resultData[key]" class="data-value" type="number" step="any" :aria-label="key" />
       </div>
+      </div>
+      <button class="action-btn confirm-btn" @click="confirmMeasurement" :disabled="isSaving">
+        {{ isSaving ? '儲存中...' : '確認並儲存資料' }}
+      </button>
+      <p v-if="saveMessage" class="success-msg">{{ saveMessage }}</p>
     </div>
   </div>
 </template>
@@ -146,8 +175,13 @@ const uploadVideo = async () => {
 .progress-bar.analyzing { width: 45%; animation: analyzing-progress 1.25s ease-in-out infinite; }
 @keyframes analyzing-progress { 0% { transform: translateX(-100%); } 100% { transform: translateX(325%); } }
 .error-msg { color: #e74c3c; margin-top: 1rem; font-weight: bold; text-align: center; }
+.success-msg { color: #218c5b; margin-top: 1rem; font-weight: bold; text-align: center; }
+.review-section { margin-top: 1.5rem; }
+.review-hint { color: #52616b; text-align: center; }
 .data-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1rem; margin-top: 1.5rem; }
 .data-item { background: #f8f9fa; padding: 1rem; border-radius: 8px; display: flex; flex-direction: column; align-items: center; border-left: 4px solid #42b883; }
 .data-key { font-size: 0.85rem; color: #666; margin-bottom: 0.5rem; }
-.data-value { font-size: 1.4rem; font-weight: bold; color: #2c3e50; }
+.data-value { width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid #cbd5d9; border-radius: 6px; text-align: center; font-size: 1.1rem; font-weight: bold; color: #2c3e50; background: white; }
+.confirm-btn { margin-top: 1rem; background-color: #34495e; }
+.confirm-btn:hover:not(:disabled) { background-color: #2c3e50; }
 </style>

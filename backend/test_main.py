@@ -86,6 +86,19 @@ def test_analyze_video_success(mock_run_analysis):
 # ==========================================
 # 測試案例 2：測試分析 API (格式錯誤防呆)
 # ==========================================
+def test_confirm_measurement_saves_user_edited_values():
+    response = client.post(
+        "/api/measurements/confirm",
+        json={"user_name": "TestUser123", "data": {"Weight": 70.2, "BMI": 22.1}},
+    )
+
+    assert response.status_code == 200
+    records = client.get("/api/records/TestUser123").json()["history"]
+    assert len(records) == 1
+    assert records[0]["weight"] == 70.2
+    assert records[0]["bmi"] == 22.1
+
+
 def test_analyze_invalid_file_format():
     # 模擬上傳一張圖片，預期會被擋下來
     fake_image_content = b"fake image data"

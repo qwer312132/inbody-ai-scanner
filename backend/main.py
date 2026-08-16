@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile, Form
+from fastapi import FastAPI, File, UploadFile, Form, Body, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import shutil
@@ -26,6 +26,33 @@ logger = logging.getLogger("inbody.api")
 # This keeps progress for the local single-process server.  Use Redis or a job
 # queue if the app is later deployed with multiple backend workers.
 analysis_progress: dict[str, dict] = {}
+
+MEASUREMENT_FIELDS = {
+    "Weight", "BMI", "Body Fat", "Visceral Fat", "BMR", "Body Age",
+    "Subcutaneous Fat (Whole Body)", "Subcutaneous Fat (Trunk)",
+    "Subcutaneous Fat (Arms)", "Subcutaneous Fat (Legs)",
+    "Skeletal Muscle (Whole Body)", "Skeletal Muscle (Trunk)",
+    "Skeletal Muscle (Arms)", "Skeletal Muscle (Legs)",
+}
+
+
+def validate_measurement(data: dict) -> dict:
+    unexpected_fields = set(data) - MEASUREMENT_FIELDS
+    if unexpected_fields:
+        raise HTTPException(status_code=422, detail="Unsupported measurement field")
+
+    normalized = {}
+    for field, value in data.items():
+        if value is None or value == "":
+            normalized[field] = None
+            continue
+        if isinstance(value, bool):
+            raise HTTPException(status_code=422, detail=f"{field} must be a number")
+        try:
+            normalized[field] = float(value)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=f"{field} must be a number") from exc
+    return normalized
 
 
 def update_analysis_progress(
@@ -165,8 +192,6 @@ async def analyze_video(
             return JSONResponse(status_code=422, content={"status": "failed", "message": "辨識失敗"})
         
         # 🚀 將數據與使用者名稱綁定，寫入資料庫
-        logger.info("[%s] Saving analysis result to database", request_id)
-        await run_in_threadpool(insert_measurement, user_name, parsed_data)
         analysis_progress[request_id]["stage"] = "completed"
         logger.info("[%s] Request complete in %.2f s", request_id, time.perf_counter() - request_started)
         
@@ -191,6 +216,21 @@ async def analyze_video(
 def get_analysis_progress(request_id: str):
     """Return the latest in-memory frame progress for one video analysis."""
     return analysis_progress.get(request_id, {"stage": "waiting", "progress": None})
+
+
+@app.post("/api/measurements/confirm")
+async def confirm_measurement(payload: dict = Body(...)):
+    """Save a user-reviewed measurement after AI analysis."""
+    user_name = payload.get("user_name")
+    data = payload.get("data")
+    if not isinstance(user_name, str) or not user_name.strip():
+        raise HTTPException(status_code=422, detail="user_name is required")
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=422, detail="data must be an object")
+
+    validated_data = validate_measurement(data)
+    await run_in_threadpool(insert_measurement, user_name.strip(), validated_data)
+    return {"status": "success", "message": "Measurement saved."}
 
 
 @app.get("/api/records/{user_name}")
