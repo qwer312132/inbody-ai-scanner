@@ -13,6 +13,41 @@ const resultData = ref(null)
 const errorMessage = ref('')
 const uploadProgress = ref(0)
 const uploadPhase = ref('')
+const analysisProgress = ref(null)
+let progressTimer = null
+
+const createRequestId = () => (
+  globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`
+)
+
+const stopAnalysisProgressPolling = () => {
+  if (progressTimer) {
+    window.clearInterval(progressTimer)
+    progressTimer = null
+  }
+}
+
+const startAnalysisProgressPolling = (requestId) => {
+  if (progressTimer) return
+
+  const refreshProgress = async () => {
+    try {
+      const response = await axios.get(`/api/analyze/${requestId}/progress`)
+      if (typeof response.data.progress === 'number') {
+        analysisProgress.value = response.data.progress
+      }
+    } catch (error) {
+      // The upload may have finished in the browser before FastAPI receives it.
+      // A later polling attempt will obtain the progress once the request starts.
+      if (error.response?.status !== 404) {
+        console.error('Unable to fetch analysis progress', error)
+      }
+    }
+  }
+
+  refreshProgress()
+  progressTimer = window.setInterval(refreshProgress, 700)
+}
 
 const handleFileChange = (event) => {
   selectedFile.value = event.target.files[0]
@@ -25,7 +60,9 @@ const uploadVideo = async () => {
   }
   
   const formData = new FormData()
+  const requestId = createRequestId()
   formData.append('user_name', props.userName) // 使用 props.userName
+  formData.append('request_id', requestId)
   formData.append('file', selectedFile.value)
 
   isLoading.value = true
@@ -33,6 +70,7 @@ const uploadVideo = async () => {
   resultData.value = null
   uploadProgress.value = 0
   uploadPhase.value = 'uploading'
+  analysisProgress.value = null
 
   try {
     const response = await axios.post('/api/analyze', formData, {
@@ -42,6 +80,7 @@ const uploadVideo = async () => {
         uploadProgress.value = Math.round((event.loaded * 100) / event.total)
         if (uploadProgress.value >= 100) {
           uploadPhase.value = 'analyzing'
+          startAnalysisProgressPolling(requestId)
         }
       }
     })
@@ -51,6 +90,7 @@ const uploadVideo = async () => {
   } finally {
     isLoading.value = false
     uploadPhase.value = ''
+    stopAnalysisProgressPolling()
   }
 }
 </script>
@@ -70,12 +110,13 @@ const uploadVideo = async () => {
         <span v-if="uploadPhase === 'uploading'">影片上傳中</span>
         <span v-else>影片已送出，AI 分析中</span>
         <span v-if="uploadPhase === 'uploading'">{{ uploadProgress }}%</span>
+        <span v-else-if="analysisProgress !== null">{{ analysisProgress }}%</span>
       </div>
-      <div class="progress-track" role="progressbar" :aria-valuenow="uploadPhase === 'uploading' ? uploadProgress : undefined" aria-valuemin="0" aria-valuemax="100">
+      <div class="progress-track" role="progressbar" :aria-valuenow="uploadPhase === 'uploading' ? uploadProgress : analysisProgress" aria-valuemin="0" aria-valuemax="100">
         <div
           class="progress-bar"
-          :class="{ analyzing: uploadPhase === 'analyzing' }"
-          :style="uploadPhase === 'uploading' ? { width: `${uploadProgress}%` } : undefined"
+          :class="{ analyzing: uploadPhase === 'analyzing' && analysisProgress === null }"
+          :style="uploadPhase === 'uploading' ? { width: `${uploadProgress}%` } : analysisProgress !== null ? { width: `${analysisProgress}%` } : undefined"
         ></div>
       </div>
     </div>

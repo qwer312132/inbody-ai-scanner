@@ -9,6 +9,7 @@ import time
 from uuid import uuid4
 from datetime import datetime
 from pathlib import Path
+from starlette.concurrency import run_in_threadpool
 from fastapi.staticfiles import StaticFiles
 # 匯入 AI 模組與資料庫設定
 from ai.inbody_analyzer import run_inbody_analysis
@@ -21,6 +22,27 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 logger = logging.getLogger("inbody.api")
+
+# This keeps progress for the local single-process server.  Use Redis or a job
+# queue if the app is later deployed with multiple backend workers.
+analysis_progress: dict[str, dict] = {}
+
+
+def update_analysis_progress(
+    request_id: str,
+    frame_number: int = 0,
+    total_frames: int = 0,
+    elapsed_seconds: float = 0,
+    stage: str = "analyzing",
+) -> None:
+    progress = round((frame_number / total_frames) * 100) if total_frames > 0 else None
+    analysis_progress[request_id] = {
+        "stage": stage,
+        "progress": progress,
+        "frame": frame_number,
+        "total_frames": total_frames,
+        "elapsed_seconds": round(elapsed_seconds, 1),
+    }
 
 # 添加 CORS 中間件
 app.add_middleware(
@@ -102,10 +124,12 @@ def insert_measurement(user_name: str, data: dict):
 @app.post("/api/analyze")
 async def analyze_video(
     user_name: str = Form(...), 
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
+    request_id: str | None = Form(None),
 ):
-    request_id = uuid4().hex[:8]
+    request_id = request_id or uuid4().hex[:8]
     request_started = time.perf_counter()
+    update_analysis_progress(request_id, stage="saving")
     logger.info(
         "[%s] Request received: user=%r, filename=%r, content_type=%r",
         request_id, user_name, file.filename, file.content_type,
@@ -127,7 +151,14 @@ async def analyze_video(
         # 呼叫 YOLO 進行分析
         logger.info("[%s] Starting AI analysis", request_id)
         analysis_started = time.perf_counter()
-        parsed_data = run_inbody_analysis(file_path, request_id=request_id)
+        parsed_data = await run_in_threadpool(
+            run_inbody_analysis,
+            file_path,
+            request_id,
+            lambda frame, total, elapsed: update_analysis_progress(
+                request_id, frame, total, elapsed,
+            ),
+        )
         logger.info("[%s] AI analysis finished in %.2f s", request_id, time.perf_counter() - analysis_started)
         
         if not parsed_data:
@@ -135,7 +166,8 @@ async def analyze_video(
         
         # 🚀 將數據與使用者名稱綁定，寫入資料庫
         logger.info("[%s] Saving analysis result to database", request_id)
-        insert_measurement(user_name, parsed_data)
+        await run_in_threadpool(insert_measurement, user_name, parsed_data)
+        analysis_progress[request_id]["stage"] = "completed"
         logger.info("[%s] Request complete in %.2f s", request_id, time.perf_counter() - request_started)
         
         return {
@@ -145,6 +177,7 @@ async def analyze_video(
         }
 
     except Exception as e:
+        analysis_progress[request_id] = {"stage": "failed", "progress": None}
         logger.exception("[%s] Request failed after %.2f s", request_id, time.perf_counter() - request_started)
         return JSONResponse(status_code=500, content={"error": str(e)})
     finally:
@@ -154,6 +187,12 @@ async def analyze_video(
             logger.info("[%s] Temporary video removed", request_id)
 
 # 🚀 新增：提供給前端畫圖用的歷史紀錄 API
+@app.get("/api/analyze/{request_id}/progress")
+def get_analysis_progress(request_id: str):
+    """Return the latest in-memory frame progress for one video analysis."""
+    return analysis_progress.get(request_id, {"stage": "waiting", "progress": None})
+
+
 @app.get("/api/records/{user_name}")
 def get_user_records(user_name: str):
     conn = sqlite3.connect(DB_FILE)
