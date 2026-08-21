@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import axios from 'axios'
 import { Line } from 'vue-chartjs'
+import { METRICS } from '../config/metrics'
 import {
   Chart as ChartJS, CategoryScale, LinearScale,
   PointElement, LineElement, Title, Tooltip, Legend
@@ -12,23 +13,6 @@ ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, T
 const props = defineProps({
   userName: String
 })
-
-const METRICS = [
-  { key: 'weight', label: '體重', unit: 'kg' },
-  { key: 'bmi', label: 'BMI', unit: '' },
-  { key: 'body_fat', label: '體脂肪率', unit: '%' },
-  { key: 'visceral_fat', label: '內臟脂肪', unit: '' },
-  { key: 'bmr', label: '基礎代謝率', unit: 'kcal' },
-  { key: 'body_age', label: '身體年齡', unit: '歲' },
-  { key: 'subfat_whole', label: '皮下脂肪（全身）', unit: '' },
-  { key: 'subfat_trunk', label: '皮下脂肪（軀幹）', unit: '' },
-  { key: 'subfat_arms', label: '皮下脂肪（手臂）', unit: '' },
-  { key: 'subfat_legs', label: '皮下脂肪（腿部）', unit: '' },
-  { key: 'muscle_whole', label: '骨骼肌（全身）', unit: '' },
-  { key: 'muscle_trunk', label: '骨骼肌（軀幹）', unit: '' },
-  { key: 'muscle_arms', label: '骨骼肌（手臂）', unit: '' },
-  { key: 'muscle_legs', label: '骨骼肌（腿部）', unit: '' }
-]
 
 const isFetchingHistory = ref(false)
 const historyMessage = ref('')
