@@ -1,6 +1,7 @@
 <script setup>
 import { ref } from 'vue'
 import axios from 'axios'
+import { METRICS } from '../config/metrics'
 
 // 接收來自父元件 (App.vue) 的 userName
 const props = defineProps({
@@ -16,7 +17,12 @@ const errorMessage = ref('')
 const uploadProgress = ref(0)
 const uploadPhase = ref('')
 const analysisProgress = ref(null)
+const analysisRequestId = ref(null)
 let progressTimer = null
+
+const orderedResultData = () => METRICS
+  .filter(metric => Object.hasOwn(resultData.value ?? {}, metric.analysisKey))
+  .map(metric => ({ ...metric, value: resultData.value[metric.analysisKey] }))
 
 const createRequestId = () => (
   globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`
@@ -88,6 +94,7 @@ const uploadVideo = async () => {
       }
     })
     resultData.value = response.data.data
+    analysisRequestId.value = response.data.request_id
   } catch (error) {
     errorMessage.value = error.response?.data?.message || "分析失敗，請檢查後端。"
   } finally {
@@ -107,6 +114,7 @@ const confirmMeasurement = async () => {
     await axios.post('/api/measurements/confirm', {
       user_name: props.userName,
       data: resultData.value,
+      request_id: analysisRequestId.value,
     })
     saveMessage.value = '資料已確認並儲存。'
   } catch (error) {
@@ -147,9 +155,9 @@ const confirmMeasurement = async () => {
     <div v-if="resultData" class="review-section">
       <p class="review-hint">請確認 AI 判讀結果；如有誤可直接修改，再按下確認儲存。</p>
       <div class="data-grid">
-      <div v-for="(value, key) in resultData" :key="key" class="data-item">
-        <span class="data-key">{{ key }}</span>
-        <input v-model="resultData[key]" class="data-value" type="number" step="any" :aria-label="key" />
+      <div v-for="metric in orderedResultData()" :key="metric.key" class="data-item">
+        <span class="data-key">{{ metric.label }}{{ metric.unit ? ` (${metric.unit})` : '' }}</span>
+        <input v-model="resultData[metric.analysisKey]" class="data-value" type="number" step="any" :aria-label="metric.label" />
       </div>
       </div>
       <button class="action-btn confirm-btn" @click="confirmMeasurement" :disabled="isSaving">

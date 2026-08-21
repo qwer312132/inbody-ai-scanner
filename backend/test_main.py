@@ -1,6 +1,7 @@
 # test_main.py
 import pytest
 import os
+import csv
 import sqlite3
 from fastapi.testclient import TestClient
 from unittest.mock import patch
@@ -97,6 +98,42 @@ def test_confirm_measurement_saves_user_edited_values():
     assert len(records) == 1
     assert records[0]["weight"] == 70.2
     assert records[0]["bmi"] == 22.1
+
+
+def test_confirming_changed_measurement_archives_video(tmp_path, monkeypatch):
+    import main
+
+    video_path = tmp_path / "source.mp4"
+    video_path.write_bytes(b"video")
+    hard_examples_dir = tmp_path / "hard_examples"
+    monkeypatch.setattr(main, "HARD_EXAMPLES_DIR", hard_examples_dir)
+    monkeypatch.setattr(main, "HARD_EXAMPLES_VIDEOS_DIR", hard_examples_dir / "videos")
+    monkeypatch.setattr(main, "HARD_EXAMPLES_CSV", hard_examples_dir / "corrections.csv")
+    main.pending_analyses["changed-video"] = {
+        "file_path": str(video_path),
+        "data": {"Weight": 75.5, "BMI": 23.4},
+    }
+
+    response = client.post(
+        "/api/measurements/confirm",
+        json={
+            "user_name": "TestUser123",
+            "request_id": "changed-video",
+            "data": {"Weight": 70.2, "BMI": 23.4},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["archived"] is True
+    assert not video_path.exists()
+    archived_videos = list((tmp_path / "hard_examples" / "videos").glob("*.mp4"))
+    assert len(archived_videos) == 1
+    with (tmp_path / "hard_examples" / "corrections.csv").open(encoding="utf-8-sig") as csv_file:
+        rows = list(csv.DictReader(csv_file))
+    assert len(rows) == 1
+    assert rows[0]["modified_fields"] == "Weight"
+    assert rows[0]["predicted_Weight"] == "75.5"
+    assert rows[0]["reviewed_Weight"] == "70.2"
 
 
 def test_analyze_invalid_file_format():

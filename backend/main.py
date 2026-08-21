@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import shutil
 import os
 import sqlite3
+import csv
 import logging
 import time
 from uuid import uuid4
@@ -26,6 +27,10 @@ logger = logging.getLogger("inbody.api")
 # This keeps progress for the local single-process server.  Use Redis or a job
 # queue if the app is later deployed with multiple backend workers.
 analysis_progress: dict[str, dict] = {}
+# Video files are kept only until the user confirms the reviewed values.  The
+# mapping is intentionally server-side so the client cannot choose an
+# arbitrary path to archive.
+pending_analyses: dict[str, dict] = {}
 
 MEASUREMENT_FIELDS = {
     "Weight", "BMI", "Body Fat", "Visceral Fat", "BMR", "Body Age",
@@ -82,6 +87,10 @@ app.add_middleware(
 
 UPLOAD_DIR = "temp_videos"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+HARD_EXAMPLES_DIR = Path(__file__).resolve().parent / "hard_examples"
+HARD_EXAMPLES_VIDEOS_DIR = HARD_EXAMPLES_DIR / "videos"
+HARD_EXAMPLES_CSV = HARD_EXAMPLES_DIR / "corrections.csv"
+HARD_EXAMPLES_VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
 
 # 伺服器啟動時，自動確保資料庫存在
 init_db()
@@ -140,6 +149,58 @@ def insert_measurement(user_name: str, data: dict):
     conn.commit()
     conn.close()
 
+
+def get_modified_fields(original_data: dict, reviewed_data: dict) -> list[str]:
+    """Return the fields whose reviewed numeric value differs from the AI result."""
+    return [
+        field
+        for field, value in reviewed_data.items()
+        if field in original_data and value != original_data[field]
+    ]
+
+
+def archive_hard_example(video_path: str) -> Path:
+    """Move a corrected video to hard_examples/videos with a timestamp name."""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    source = Path(video_path)
+    video_dir = Path(HARD_EXAMPLES_VIDEOS_DIR)
+    video_dir.mkdir(parents=True, exist_ok=True)
+    destination = video_dir / f"{timestamp}_{uuid4().hex[:8]}{source.suffix.lower()}"
+    shutil.move(str(source), destination)
+    return destination
+
+
+def write_hard_example_record(
+    archived_video: Path,
+    user_name: str,
+    original_data: dict,
+    reviewed_data: dict,
+    modified_fields: list[str],
+) -> None:
+    """Append the AI prediction and user-reviewed data for one hard example."""
+    csv_path = Path(HARD_EXAMPLES_CSV)
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = [
+        "recorded_at", "video_path", "user_name", "modified_fields",
+        *[f"predicted_{field}" for field in sorted(MEASUREMENT_FIELDS)],
+        *[f"reviewed_{field}" for field in sorted(MEASUREMENT_FIELDS)],
+    ]
+    row = {
+        "recorded_at": datetime.now().isoformat(timespec="seconds"),
+        "video_path": archived_video.relative_to(Path(HARD_EXAMPLES_DIR)).as_posix(),
+        "user_name": user_name,
+        "modified_fields": "|".join(modified_fields),
+    }
+    row.update({f"predicted_{field}": original_data.get(field) for field in MEASUREMENT_FIELDS})
+    row.update({f"reviewed_{field}": reviewed_data.get(field) for field in MEASUREMENT_FIELDS})
+
+    has_header = csv_path.exists() and csv_path.stat().st_size > 0
+    with csv_path.open("a", newline="", encoding="utf-8-sig") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
+        if not has_header:
+            writer.writeheader()
+        writer.writerow(row)
+
 # ==========================================
 # API 路由
 # ==========================================
@@ -166,6 +227,7 @@ async def analyze_video(
 
     unique_filename = f"{uuid4()}_{file.filename}"
     file_path = os.path.join(UPLOAD_DIR, unique_filename)
+    parsed_data = None
 
     try:
         logger.info("[%s] Saving uploaded video", request_id)
@@ -198,7 +260,8 @@ async def analyze_video(
         return {
             "status": "success",
             "message": f"分析完成！已將數據記錄至 {user_name} 的名下。",
-            "data": parsed_data
+            "data": parsed_data,
+            "request_id": request_id,
         }
 
     except Exception as e:
@@ -207,7 +270,14 @@ async def analyze_video(
         return JSONResponse(status_code=500, content={"error": str(e)})
     finally:
         file.file.close()
-        if os.path.exists(file_path):
+        # A successful analysis must stay available until the user either
+        # confirms it unchanged (delete) or corrects it (archive).
+        if parsed_data:
+            pending_analyses[request_id] = {
+                "file_path": file_path,
+                "data": parsed_data,
+            }
+        elif os.path.exists(file_path):
             os.remove(file_path)
             logger.info("[%s] Temporary video removed", request_id)
 
@@ -223,6 +293,7 @@ async def confirm_measurement(payload: dict = Body(...)):
     """Save a user-reviewed measurement after AI analysis."""
     user_name = payload.get("user_name")
     data = payload.get("data")
+    request_id = payload.get("request_id")
     if not isinstance(user_name, str) or not user_name.strip():
         raise HTTPException(status_code=422, detail="user_name is required")
     if not isinstance(data, dict):
@@ -230,7 +301,34 @@ async def confirm_measurement(payload: dict = Body(...)):
 
     validated_data = validate_measurement(data)
     await run_in_threadpool(insert_measurement, user_name.strip(), validated_data)
-    return {"status": "success", "message": "Measurement saved."}
+
+    archived_video = None
+    pending_analysis = pending_analyses.pop(request_id, None) if isinstance(request_id, str) else None
+    if pending_analysis:
+        video_path = pending_analysis["file_path"]
+        modified_fields = get_modified_fields(pending_analysis["data"], validated_data)
+        if modified_fields and os.path.exists(video_path):
+            archived_video = await run_in_threadpool(
+                archive_hard_example, video_path,
+            )
+            await run_in_threadpool(
+                write_hard_example_record,
+                archived_video,
+                user_name.strip(),
+                pending_analysis["data"],
+                validated_data,
+                modified_fields,
+            )
+            logger.info("[%s] Archived corrected video at %s", request_id, archived_video)
+        elif os.path.exists(video_path):
+            os.remove(video_path)
+            logger.info("[%s] Temporary video removed after unchanged confirmation", request_id)
+
+    return {
+        "status": "success",
+        "message": "Measurement saved.",
+        "archived": archived_video is not None,
+    }
 
 
 @app.get("/api/records/{user_name}")
